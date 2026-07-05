@@ -351,6 +351,12 @@ struct wlr_scene_output {
 	// Whether the current combined color transform was built from an
 	// output image description. Appended for ABI compatibility.
 	bool combined_has_image_description;
+
+	// Output-space magnification around a focus point given in output-local
+	// logical coordinates (values <= 1.0 disable magnification). Appended
+	// for ABI compatibility.
+	float zoom;
+	double zoom_lx, zoom_ly;
 };
 
 struct wlr_scene_timer {
@@ -918,6 +924,16 @@ void wlr_scene_output_destroy(struct wlr_scene_output *scene_output);
  */
 void wlr_scene_output_set_position(struct wlr_scene_output *scene_output,
 	int lx, int ly);
+/**
+ * Magnify the output around a focus point given in output-local logical
+ * coordinates. The composited frame is blitted so that a 1/zoom sub-rect
+ * centered on the focus point (clamped to the output edges) fills the whole
+ * output. Values <= 1.0 disable magnification. While active, the whole
+ * output is redrawn every frame and direct scan-out is inhibited. Hardware
+ * cursor planes are not magnified: lock software cursors while zoomed.
+ */
+void wlr_scene_output_set_zoom(struct wlr_scene_output *scene_output,
+	float zoom, double lx, double ly);
 
 struct wlr_scene_output_state_options {
 	struct wlr_scene_timer *timer;

@@ -18,6 +18,7 @@
 #include <wlr/util/transform.h>
 
 #include "render/color.h"
+#include "render/fx_renderer/fx_renderer.h"
 #include "render/tracy.h"
 #include "scenefx/render/fx_renderer/fx_offscreen_buffers.h"
 #include "scenefx/render/pass.h"
@@ -2585,6 +2586,7 @@ struct wlr_scene_output *wlr_scene_output_create(struct wlr_scene *scene,
 
 	scene_output->output = output;
 	scene_output->scene = scene;
+	scene_output->zoom = 1.0f;
 	wlr_addon_init(&scene_output->addon, &output->addons, scene, &output_addon_impl);
 
 	wlr_damage_ring_init(&scene_output->damage_ring);
@@ -2704,6 +2706,28 @@ void wlr_scene_output_set_position(struct wlr_scene_output *scene_output,
 	scene_output->y = ly;
 
 	scene_output_update_geometry(scene_output, false);
+}
+
+void wlr_scene_output_set_zoom(struct wlr_scene_output *scene_output,
+		float zoom, double lx, double ly) {
+	if (zoom < 1.0f) {
+		zoom = 1.0f;
+	}
+
+	bool was_active = scene_output->zoom > 1.0f;
+	bool active = zoom > 1.0f;
+	if (scene_output->zoom == zoom &&
+			(!active || (scene_output->zoom_lx == lx && scene_output->zoom_ly == ly))) {
+		return;
+	}
+
+	scene_output->zoom = zoom;
+	scene_output->zoom_lx = lx;
+	scene_output->zoom_ly = ly;
+
+	if (was_active || active) {
+		scene_output_damage_whole(scene_output);
+	}
 }
 
 static bool scene_node_invisible(struct wlr_scene_node *node) {
@@ -3238,6 +3262,52 @@ cleanup_transforms:
 	return result;
 }
 
+// Magnify the composited frame around the zoom focus point: set the frame
+// aside into an offscreen buffer, then draw a focus-centered 1/zoom sub-rect
+// of it (clamped to the output edges) back over the whole buffer
+static void scene_output_render_zoom(struct wlr_scene_output *scene_output,
+		struct fx_gles_render_pass *fx_pass, const struct render_data *data) {
+	struct fx_framebuffer *saved =
+		fx_pass->fx_offscreen_buffers->blur_saved_pixels_buffer;
+	struct wlr_buffer *buffer = fx_pass->buffer->buffer;
+	double zoom = scene_output->zoom;
+
+	// Focus point in transformed buffer coordinates
+	double focus_x = scene_output->zoom_lx * data->scale;
+	double focus_y = scene_output->zoom_ly * data->scale;
+
+	struct wlr_fbox src = {
+		.width = data->trans_width / zoom,
+		.height = data->trans_height / zoom,
+	};
+	src.x = fmax(fmin(focus_x - src.width / 2.0, data->trans_width - src.width), 0.0);
+	src.y = fmax(fmin(focus_y - src.height / 2.0, data->trans_height - src.height), 0.0);
+
+	// The frame is stored in buffer (untransformed) space
+	wlr_fbox_transform(&src, &src, wlr_output_transform_invert(data->transform),
+		data->trans_width, data->trans_height);
+
+	pixman_region32_t full;
+	pixman_region32_init_rect(&full, 0, 0, buffer->width, buffer->height);
+	fx_render_pass_read_to_buffer(fx_pass, &full, saved, fx_pass->buffer);
+
+	struct wlr_texture *texture = wlr_texture_from_buffer(
+		scene_output->output->renderer, saved->buffer);
+	if (texture != NULL) {
+		wlr_render_pass_add_texture(&fx_pass->base, &(struct wlr_render_texture_options){
+			.texture = texture,
+			.src_box = src,
+			.dst_box = { .width = buffer->width, .height = buffer->height },
+			.transform = WL_OUTPUT_TRANSFORM_NORMAL,
+			.blend_mode = WLR_RENDER_BLEND_MODE_NONE,
+			.filter_mode = WLR_SCALE_FILTER_BILINEAR,
+			.clip = &full,
+		});
+		wlr_texture_destroy(texture);
+	}
+	pixman_region32_fini(&full);
+}
+
 bool wlr_scene_output_build_state(struct wlr_scene_output *scene_output,
 		struct wlr_output_state *state, const struct wlr_scene_output_state_options *options) {
 	struct wlr_scene_output_state_options default_options = {0};
@@ -3326,6 +3396,13 @@ bool wlr_scene_output_build_state(struct wlr_scene_output *scene_output,
 		scene_output_damage_whole(scene_output);
 	}
 
+	// While zoomed, the final blit rewrites the entire buffer: previous
+	// buffer contents hold magnified frames and can't seed partial redraws
+	bool zoom_active = scene_output->zoom > 1.0f;
+	if (zoom_active) {
+		scene_output_damage_whole(scene_output);
+	}
+
 	struct timespec now;
 	if (debug_damage == WLR_SCENE_DEBUG_DAMAGE_HIGHLIGHT) {
 		struct wl_list *regions = &scene_output->damage_highlight_regions;
@@ -3372,6 +3449,7 @@ bool wlr_scene_output_build_state(struct wlr_scene_output *scene_output,
 	// - Damage highlight debugging is not enabled
 	enum scene_direct_scanout_result scanout_result = SCANOUT_INELIGIBLE;
 	if (options->color_transform == NULL && !render_gamma_lut && list_len == 1
+			&& !zoom_active
 			&& debug_damage != WLR_SCENE_DEBUG_DAMAGE_HIGHLIGHT) {
 		scanout_result = scene_entry_try_direct_scanout(&list_data[0], state, &render_data);
 	}
@@ -3654,6 +3732,10 @@ bool wlr_scene_output_build_state(struct wlr_scene_output *scene_output,
 		// Render the saved pixels over the blur artifacts
 		fx_render_pass_read_to_buffer(fx_pass, &fx_pass->blur_padding_region,
 				fx_pass->buffer, fx_pass->fx_offscreen_buffers->blur_saved_pixels_buffer);
+	}
+
+	if (zoom_active && fx_pass->fx_offscreen_buffers != NULL) {
+		scene_output_render_zoom(scene_output, fx_pass, &render_data);
 	}
 
 	pixman_region32_fini(&render_data.damage);
