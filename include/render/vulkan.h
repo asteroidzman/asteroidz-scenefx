@@ -178,6 +178,8 @@ enum fx_vk_shader_source {
 	WLR_VK_SHADER_SOURCE_BLUR1,
 	WLR_VK_SHADER_SOURCE_BLUR2,
 	WLR_VK_SHADER_SOURCE_BLUR_EFFECTS,
+	// rounded rect with a linear/conic multi-stop gradient fill (fx_vk fork).
+	WLR_VK_SHADER_SOURCE_QUAD_GRAD_ROUND,
 };
 
 // Constants used to pick the color transform for the blend-to-output
@@ -397,6 +399,7 @@ struct fx_vk_renderer {
 	VkShaderModule blur1_frag_module;
 	VkShaderModule blur2_frag_module;
 	VkShaderModule blur_effects_frag_module;
+	VkShaderModule quad_grad_round_frag_module;
 
 	struct wl_list pipeline_layouts; // struct fx_vk_pipeline_layout.link
 

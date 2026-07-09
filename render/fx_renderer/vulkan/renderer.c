@@ -32,6 +32,7 @@
 #include "blur1.frag.h"
 #include "blur2.frag.h"
 #include "blur_effects.frag.h"
+#include "quad_grad_round.frag.h"
 #include "types/wlr_buffer.h"
 #include "util/time.h"
 
@@ -1470,6 +1471,7 @@ static void fx_vulkan_destroy(struct wlr_renderer *wlr_renderer) {
 	vkDestroyShaderModule(dev->dev, renderer->blur1_frag_module, NULL);
 	vkDestroyShaderModule(dev->dev, renderer->blur2_frag_module, NULL);
 	vkDestroyShaderModule(dev->dev, renderer->blur_effects_frag_module, NULL);
+	vkDestroyShaderModule(dev->dev, renderer->quad_grad_round_frag_module, NULL);
 
 	struct fx_vk_pipeline_layout *pipeline_layout, *pipeline_layout_tmp;
 	wl_list_for_each_safe(pipeline_layout, pipeline_layout_tmp,
@@ -2136,6 +2138,14 @@ struct fx_vk_pipeline *setup_get_or_create_pipeline(
 			.pName = "main",
 		};
 		break;
+	case WLR_VK_SHADER_SOURCE_QUAD_GRAD_ROUND:
+		stages[1] = (VkPipelineShaderStageCreateInfo) {
+			.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+			.stage = VK_SHADER_STAGE_FRAGMENT_BIT,
+			.module = renderer->quad_grad_round_frag_module,
+			.pName = "main",
+		};
+		break;
 	}
 
 	VkPipelineInputAssemblyStateCreateInfo assembly = {
@@ -2679,6 +2689,17 @@ static bool init_static_render_data(struct fx_vk_renderer *renderer) {
 	res = vkCreateShaderModule(dev, &sinfo, NULL, &renderer->blur_effects_frag_module);
 	if (res != VK_SUCCESS) {
 		fx_vk_error("Failed to create blur-effects fragment shader module", res);
+		return false;
+	}
+
+	sinfo = (VkShaderModuleCreateInfo){
+		.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+		.codeSize = sizeof(quad_grad_round_frag_data),
+		.pCode = quad_grad_round_frag_data,
+	};
+	res = vkCreateShaderModule(dev, &sinfo, NULL, &renderer->quad_grad_round_frag_module);
+	if (res != VK_SUCCESS) {
+		fx_vk_error("Failed to create gradient quad fragment shader module", res);
 		return false;
 	}
 

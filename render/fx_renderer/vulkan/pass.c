@@ -1150,17 +1150,128 @@ void fx_vk_render_pass_add_rounded_rect(struct wlr_render_pass *wlr_pass,
 		&options->corners, &options->clipped_region);
 }
 
+// Gradient push-constant offsets (see shaders/quad_grad_round.frag): params at
+// 80 (ends 120), corner block at 128 (ends 192), 2 colour stops at 192.
+#define FX_VK_GRAD_PARAMS_OFFSET (int)sizeof(struct fx_vk_vert_pcr_data) // 80
+#define FX_VK_GRAD_CORNER_OFFSET 128
+#define FX_VK_GRAD_COLORS_OFFSET 192
+
+// Real 2-stop rounded gradient (see quad_grad_round.frag). Colours are
+// converted to linear premultiplied on the CPU (same as render_rounded_rect),
+// so the shader's interpolation stays premultiplied.
+static void render_rounded_rect_grad(struct fx_vk_render_pass *pass,
+		const struct fx_render_rounded_rect_grad_options *options) {
+	VkCommandBuffer cb = pass->command_buffer->vk;
+	const struct wlr_render_rect_options *base = &options->base;
+
+	struct wlr_box box;
+	wlr_render_rect_options_get_box(base, pass->render_buffer->wlr_buffer, &box);
+
+	pixman_region32_t clip;
+	get_clip_region(pass, base->clip, &clip);
+
+	int clip_rects_len;
+	const pixman_box32_t *clip_rects = pixman_region32_rectangles(&clip, &clip_rects_len);
+	for (int i = 0; i < clip_rects_len; i++) {
+		struct wlr_box clip_box = {
+			.x = clip_rects[i].x1, .y = clip_rects[i].y1,
+			.width = clip_rects[i].x2 - clip_rects[i].x1,
+			.height = clip_rects[i].y2 - clip_rects[i].y1,
+		};
+		struct wlr_box intersection;
+		if (wlr_box_intersection(&intersection, &box, &clip_box)) {
+			render_pass_mark_box_updated(pass, &intersection);
+		}
+	}
+
+	float proj[9], matrix[9];
+	wlr_matrix_identity(proj);
+	wlr_matrix_project_box(matrix, &box, WL_OUTPUT_TRANSFORM_NORMAL, proj);
+	wlr_matrix_multiply(matrix, pass->projection, matrix);
+
+	struct fx_vk_pipeline *pipe = setup_get_or_create_pipeline(
+		pass->render_setup,
+		&(struct fx_vk_pipeline_key) {
+			.source = WLR_VK_SHADER_SOURCE_QUAD_GRAD_ROUND,
+			.blend_mode = WLR_RENDER_BLEND_MODE_PREMULTIPLIED,
+			.layout = {0},
+		});
+	if (!pipe) {
+		pass->failed = true;
+		pixman_region32_fini(&clip);
+		return;
+	}
+
+	struct fx_vk_vert_pcr_data vert_pcr_data = {
+		.uv_off = { 0, 0 },
+		.uv_size = { 1, 1 },
+	};
+	encode_proj_matrix(matrix, vert_pcr_data.mat4);
+
+	struct {
+		float grad_box[2];
+		float grad_size[2];
+		float origin[2];
+		float degree;
+		int32_t linear;
+		int32_t blend;
+		int32_t count;
+	} params = {
+		.grad_box = { options->gradient.range.x, options->gradient.range.y },
+		.grad_size = { options->gradient.range.width, options->gradient.range.height },
+		.origin = { options->gradient.origin[0], options->gradient.origin[1] },
+		.degree = options->gradient.degree,
+		.linear = options->gradient.linear,
+		.blend = options->gradient.blend,
+		.count = 2,
+	};
+
+	struct fx_vk_frag_corner_pcr_data corner_pcr;
+	fill_corner_pcr(&corner_pcr, &box, &options->corners, &options->clipped_region);
+
+	// Two stops, linear premultiplied (matches render_pass_add_rect conversion).
+	const float *c = options->gradient.colors;
+	float colors[8] = {
+		color_to_linear_premult(c[0], c[3]), color_to_linear_premult(c[1], c[3]),
+		color_to_linear_premult(c[2], c[3]), c[3],
+		color_to_linear_premult(c[4], c[7]), color_to_linear_premult(c[5], c[7]),
+		color_to_linear_premult(c[6], c[7]), c[7],
+	};
+
+	bind_pipeline(pass, pipe->vk);
+	vkCmdPushConstants(cb, pipe->layout->vk, VK_SHADER_STAGE_VERTEX_BIT,
+		0, sizeof(vert_pcr_data), &vert_pcr_data);
+	vkCmdPushConstants(cb, pipe->layout->vk, VK_SHADER_STAGE_FRAGMENT_BIT,
+		FX_VK_GRAD_PARAMS_OFFSET, sizeof(params), &params);
+	vkCmdPushConstants(cb, pipe->layout->vk, VK_SHADER_STAGE_FRAGMENT_BIT,
+		FX_VK_GRAD_CORNER_OFFSET, sizeof(corner_pcr), &corner_pcr);
+	vkCmdPushConstants(cb, pipe->layout->vk, VK_SHADER_STAGE_FRAGMENT_BIT,
+		FX_VK_GRAD_COLORS_OFFSET, sizeof(colors), colors);
+
+	for (int i = 0; i < clip_rects_len; i++) {
+		VkRect2D rect;
+		convert_pixman_box_to_vk_rect(&clip_rects[i], &rect);
+		vkCmdSetScissor(cb, 0, 1, &rect);
+		vkCmdDraw(cb, 4, 1, 0, 0);
+	}
+
+	pixman_region32_fini(&clip);
+}
+
 void fx_vk_render_pass_add_rounded_rect_grad(struct wlr_render_pass *wlr_pass,
 		const struct fx_render_rounded_rect_grad_options *options) {
-	// NOTE: gradient fills are not implemented on the Vulkan path yet (they
-	// need a variable-length colour array via a UBO/SSBO, out of scope for this
-	// step). We still honour the rounded-corner + clip geometry so gradient
-	// borders keep their shape. Fill with the gradient's FIRST stop rather than
-	// options->base.color: wlr_scene_rect_set_gradient leaves rect->color at its
-	// last solid value (e.g. the inactive border colour), so a focused/gradient
-	// border would otherwise render stale. The first stop is the primary colour
-	// (focus colour for borders), which keeps a solid focused border matching
-	// the flat pills. Replace with a real gradient shader in a later step.
+	struct fx_vk_render_pass *pass = get_render_pass(wlr_pass);
+
+	// Real gradient for the common 2-stop case (asteroidz border gradients).
+	if (options->gradient.count == 2 && options->gradient.colors != NULL) {
+		render_rounded_rect_grad(pass, options);
+		return;
+	}
+
+	// Fallback for other stop counts (not yet supported in the fx_vk gradient
+	// shader): render a solid rounded rect in the gradient's FIRST stop.
+	// wlr_scene_rect_set_gradient leaves the rect's base colour stale, so use
+	// the first stop (the primary/focus colour) rather than options->base.color.
 	struct wlr_render_rect_options base = options->base;
 	if (options->gradient.count > 0 && options->gradient.colors != NULL) {
 		base.color = (struct wlr_render_color){
@@ -1170,8 +1281,7 @@ void fx_vk_render_pass_add_rounded_rect_grad(struct wlr_render_pass *wlr_pass,
 			.a = options->gradient.colors[3],
 		};
 	}
-	render_rounded_rect(get_render_pass(wlr_pass), &base,
-		&options->corners, &options->clipped_region);
+	render_rounded_rect(pass, &base, &options->corners, &options->clipped_region);
 }
 
 // Box shadow via the fast rounded-rectangle gaussian (see box_shadow.frag).
