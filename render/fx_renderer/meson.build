@@ -45,3 +45,14 @@ if 'gles2' in renderers or 'auto' in renderers
 	subdir('shaders')
 
 endif
+
+# Vulkan renderer (WIP). Opt in with -Drenderers=gles2,vulkan. Requires the
+# GLES2 renderer to remain built as the fallback while the Vulkan render path
+# is still being implemented.
+if 'vulkan' in renderers
+	vulkan = dependency('vulkan', required: true)
+	scenefx_deps += vulkan
+	scenefx_files += files('fx_vk_renderer.c')
+	features += {'vulkan-renderer': true}
+	add_project_arguments('-DFX_HAS_VULKAN=1', language: 'c')
+endif

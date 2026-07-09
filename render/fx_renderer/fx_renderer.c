@@ -26,6 +26,10 @@
 #include "render/tracy.h"
 #include "scenefx/render/fx_renderer/fx_offscreen_buffers.h"
 #include "scenefx/render/fx_renderer/fx_renderer.h"
+#ifdef FX_HAS_VULKAN
+#include "scenefx/render/fx_renderer/fx_vk_renderer.h"
+#include <string.h>
+#endif
 #include "scenefx/render/pass.h"
 #include "util/time.h"
 
@@ -335,6 +339,21 @@ static struct wlr_renderer *renderer_autocreate(struct wlr_backend *backend, int
 		wlr_log(WLR_ERROR, "Cannot create GLES2 renderer: no DRM FD available");
 		return NULL;
 	}
+
+#ifdef FX_HAS_VULKAN
+	const char *want = getenv("WLR_RENDERER");
+	if (want != NULL && strcmp(want, "vulkan") == 0) {
+		struct wlr_renderer *vk = fx_vk_renderer_create_with_drm_fd(drm_fd);
+		if (vk != NULL) {
+			if (own_drm_fd && drm_fd >= 0) {
+				close(drm_fd);
+			}
+			return vk;
+		}
+		wlr_log(WLR_INFO,
+			"vulkan renderer unavailable/incomplete; using GLES2");
+	}
+#endif
 
 	struct wlr_egl *egl = wlr_egl_create_with_drm_fd(drm_fd);
 	if (egl == NULL) {
