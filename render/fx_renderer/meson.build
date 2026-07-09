@@ -50,9 +50,12 @@ endif
 # GLES2 renderer to remain built as the fallback while the Vulkan render path
 # is still being implemented.
 if 'vulkan' in renderers
-	vulkan = dependency('vulkan', required: true)
+	vulkan = dependency('vulkan', version: '>=1.2.182', required: true)
+	glslang = find_program('glslang', 'glslangValidator', native: true, required: true)
+	glslang_version_info = run_command(glslang, '--version', check: true).stdout()
+	glslang_version = glslang_version_info.split('\n')[0].split(':')[-1].strip()
 	scenefx_deps += vulkan
-	scenefx_files += files('fx_vk_renderer.c')
 	features += {'vulkan-renderer': true}
 	add_project_arguments('-DFX_HAS_VULKAN=1', language: 'c')
+	subdir('vulkan')
 endif

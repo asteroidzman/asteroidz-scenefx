@@ -2,7 +2,7 @@
 #include <wlr/util/log.h>
 #include "render/vulkan.h"
 
-int vulkan_find_mem_type(struct wlr_vk_device *dev,
+int fx_vulkan_find_mem_type(struct fx_vk_device *dev,
 		VkMemoryPropertyFlags flags, uint32_t req_bits) {
 	VkPhysicalDeviceMemoryProperties props;
 	vkGetPhysicalDeviceMemoryProperties(dev->phdev, &props);
@@ -18,7 +18,7 @@ int vulkan_find_mem_type(struct wlr_vk_device *dev,
 	return -1;
 }
 
-const char *vulkan_strerror(VkResult err) {
+const char *fx_vulkan_strerror(VkResult err) {
 #define ERR_STR(r) case VK_ ##r: return #r
 	switch (err) {
 	ERR_STR(SUCCESS);
@@ -58,7 +58,7 @@ const char *vulkan_strerror(VkResult err) {
 #undef ERR_STR
 }
 
-void vulkan_change_layout(VkCommandBuffer cb, VkImage img,
+void fx_vulkan_change_layout(VkCommandBuffer cb, VkImage img,
 		VkImageLayout ol, VkPipelineStageFlags srcs, VkAccessFlags srca,
 		VkImageLayout nl, VkPipelineStageFlags dsts, VkAccessFlags dsta) {
 	VkImageMemoryBarrier barrier = {

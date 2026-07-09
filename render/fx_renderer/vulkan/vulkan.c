@@ -80,7 +80,7 @@ static VKAPI_ATTR VkBool32 debug_callback(VkDebugUtilsMessageSeverityFlagBitsEXT
 	return false;
 }
 
-struct wlr_vk_instance *vulkan_instance_create(bool debug) {
+struct fx_vk_instance *fx_vulkan_instance_create(bool debug) {
 	// we require vulkan 1.1
 	PFN_vkEnumerateInstanceVersion pfEnumInstanceVersion =
 		(PFN_vkEnumerateInstanceVersion)
@@ -101,7 +101,7 @@ struct wlr_vk_instance *vulkan_instance_create(bool debug) {
 	VkResult res;
 	res = vkEnumerateInstanceExtensionProperties(NULL, &avail_extc, NULL);
 	if ((res != VK_SUCCESS) || (avail_extc == 0)) {
-		wlr_vk_error("Could not enumerate instance extensions (1)", res);
+		fx_vk_error("Could not enumerate instance extensions (1)", res);
 		return NULL;
 	}
 
@@ -109,7 +109,7 @@ struct wlr_vk_instance *vulkan_instance_create(bool debug) {
 	res = vkEnumerateInstanceExtensionProperties(NULL, &avail_extc,
 		avail_ext_props);
 	if (res != VK_SUCCESS) {
-		wlr_vk_error("Could not enumerate instance extensions (2)", res);
+		fx_vk_error("Could not enumerate instance extensions (2)", res);
 		return NULL;
 	}
 
@@ -118,7 +118,7 @@ struct wlr_vk_instance *vulkan_instance_create(bool debug) {
 			avail_ext_props[j].extensionName, avail_ext_props[j].specVersion);
 	}
 
-	struct wlr_vk_instance *ini = calloc(1, sizeof(*ini));
+	struct fx_vk_instance *ini = calloc(1, sizeof(*ini));
 	if (!ini) {
 		wlr_log_errno(WLR_ERROR, "allocation failed");
 		return NULL;
@@ -179,7 +179,7 @@ struct wlr_vk_instance *vulkan_instance_create(bool debug) {
 
 	res = vkCreateInstance(&instance_info, NULL, &ini->instance);
 	if (res != VK_SUCCESS) {
-		wlr_vk_error("Could not create instance", res);
+		fx_vk_error("Could not create instance", res);
 		goto error;
 	}
 
@@ -202,11 +202,11 @@ struct wlr_vk_instance *vulkan_instance_create(bool debug) {
 	return ini;
 
 error:
-	vulkan_instance_destroy(ini);
+	fx_vulkan_instance_destroy(ini);
 	return NULL;
 }
 
-void vulkan_instance_destroy(struct wlr_vk_instance *ini) {
+void fx_vulkan_instance_destroy(struct fx_vk_instance *ini) {
 	if (!ini) {
 		return;
 	}
@@ -256,20 +256,20 @@ static void log_phdev(const VkPhysicalDeviceProperties *props) {
 	wlr_log(WLR_INFO, "  Driver version: %u.%u.%u", dv_major, dv_minor, dv_patch);
 }
 
-VkPhysicalDevice vulkan_find_drm_phdev(struct wlr_vk_instance *ini, int drm_fd) {
+VkPhysicalDevice fx_vulkan_find_drm_phdev(struct fx_vk_instance *ini, int drm_fd) {
 	VkResult res;
 	uint32_t num_phdevs;
 
 	res = vkEnumeratePhysicalDevices(ini->instance, &num_phdevs, NULL);
 	if (res != VK_SUCCESS) {
-		wlr_vk_error("Could not retrieve physical devices", res);
+		fx_vk_error("Could not retrieve physical devices", res);
 		return VK_NULL_HANDLE;
 	}
 
 	VkPhysicalDevice phdevs[1 + num_phdevs];
 	res = vkEnumeratePhysicalDevices(ini->instance, &num_phdevs, phdevs);
 	if (res != VK_SUCCESS) {
-		wlr_vk_error("Could not retrieve physical devices", res);
+		fx_vk_error("Could not retrieve physical devices", res);
 		return VK_NULL_HANDLE;
 	}
 
@@ -301,7 +301,7 @@ VkPhysicalDevice vulkan_find_drm_phdev(struct wlr_vk_instance *ini, int drm_fd) 
 		res = vkEnumerateDeviceExtensionProperties(phdev, NULL,
 			&avail_extc, NULL);
 		if ((res != VK_SUCCESS) || (avail_extc == 0)) {
-			wlr_vk_error("  Could not enumerate device extensions", res);
+			fx_vk_error("  Could not enumerate device extensions", res);
 			continue;
 		}
 
@@ -309,7 +309,7 @@ VkPhysicalDevice vulkan_find_drm_phdev(struct wlr_vk_instance *ini, int drm_fd) 
 		res = vkEnumerateDeviceExtensionProperties(phdev, NULL,
 			&avail_extc, avail_ext_props);
 		if (res != VK_SUCCESS) {
-			wlr_vk_error("  Could not enumerate device extensions", res);
+			fx_vk_error("  Could not enumerate device extensions", res);
 			continue;
 		}
 
@@ -370,8 +370,8 @@ VkPhysicalDevice vulkan_find_drm_phdev(struct wlr_vk_instance *ini, int drm_fd) 
 	return VK_NULL_HANDLE;
 }
 
-int vulkan_open_phdev_drm_fd(VkPhysicalDevice phdev) {
-	// vulkan_find_drm_phdev() already checks that VK_EXT_physical_device_drm
+int fx_vulkan_open_phdev_drm_fd(VkPhysicalDevice phdev) {
+	// fx_vulkan_find_drm_phdev() already checks that VK_EXT_physical_device_drm
 	// is supported
 	VkPhysicalDeviceDrmPropertiesEXT drm_props = {
 		.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRM_PROPERTIES_EXT,
@@ -416,7 +416,7 @@ int vulkan_open_phdev_drm_fd(VkPhysicalDevice phdev) {
 	return drm_fd;
 }
 
-static void load_device_proc(struct wlr_vk_device *dev, const char *name,
+static void load_device_proc(struct fx_vk_device *dev, const char *name,
 		void *proc_ptr) {
 	void *proc = (void *)vkGetDeviceProcAddr(dev->dev, name);
 	if (proc == NULL) {
@@ -425,7 +425,7 @@ static void load_device_proc(struct wlr_vk_device *dev, const char *name,
 	*(void **)proc_ptr = proc;
 }
 
-struct wlr_vk_device *vulkan_device_create(struct wlr_vk_instance *ini,
+struct fx_vk_device *fx_vulkan_device_create(struct fx_vk_instance *ini,
 		VkPhysicalDevice phdev) {
 	VkResult res;
 
@@ -433,7 +433,7 @@ struct wlr_vk_device *vulkan_device_create(struct wlr_vk_instance *ini,
 	res = vkEnumerateDeviceExtensionProperties(phdev, NULL,
 		&avail_extc, NULL);
 	if (res != VK_SUCCESS || avail_extc == 0) {
-		wlr_vk_error("Could not enumerate device extensions (1)", res);
+		fx_vk_error("Could not enumerate device extensions (1)", res);
 		return NULL;
 	}
 
@@ -441,7 +441,7 @@ struct wlr_vk_device *vulkan_device_create(struct wlr_vk_instance *ini,
 	res = vkEnumerateDeviceExtensionProperties(phdev, NULL,
 		&avail_extc, avail_ext_props);
 	if (res != VK_SUCCESS) {
-		wlr_vk_error("Could not enumerate device extensions (2)", res);
+		fx_vk_error("Could not enumerate device extensions (2)", res);
 		return NULL;
 	}
 
@@ -450,7 +450,7 @@ struct wlr_vk_device *vulkan_device_create(struct wlr_vk_instance *ini,
 			avail_ext_props[j].extensionName, avail_ext_props[j].specVersion);
 	}
 
-	struct wlr_vk_device *dev = calloc(1, sizeof(*dev));
+	struct fx_vk_device *dev = calloc(1, sizeof(*dev));
 	if (!dev) {
 		wlr_log_errno(WLR_ERROR, "allocation failed");
 		return NULL;
@@ -618,7 +618,7 @@ struct wlr_vk_device *vulkan_device_create(struct wlr_vk_instance *ini,
 	}
 
 	if (res != VK_SUCCESS) {
-		wlr_vk_error("Failed to create vulkan device", res);
+		fx_vk_error("Failed to create vulkan device", res);
 		goto error;
 	}
 
@@ -637,7 +637,7 @@ struct wlr_vk_device *vulkan_device_create(struct wlr_vk_instance *ini,
 	}
 
 	size_t max_fmts;
-	const struct wlr_vk_format *fmts = vulkan_get_format_list(&max_fmts);
+	const struct fx_vk_format *fmts = fx_vulkan_get_format_list(&max_fmts);
 	dev->format_props = calloc(max_fmts, sizeof(*dev->format_props));
 	if (!dev->format_props) {
 		wlr_log_errno(WLR_ERROR, "allocation failed");
@@ -646,17 +646,17 @@ struct wlr_vk_device *vulkan_device_create(struct wlr_vk_instance *ini,
 
 	wlr_log(WLR_DEBUG, "Supported Vulkan formats:");
 	for (unsigned i = 0u; i < max_fmts; ++i) {
-		vulkan_format_props_query(dev, &fmts[i]);
+		fx_vulkan_format_props_query(dev, &fmts[i]);
 	}
 
 	return dev;
 
 error:
-	vulkan_device_destroy(dev);
+	fx_vulkan_device_destroy(dev);
 	return NULL;
 }
 
-void vulkan_device_destroy(struct wlr_vk_device *dev) {
+void fx_vulkan_device_destroy(struct fx_vk_device *dev) {
 	if (!dev) {
 		return;
 	}
@@ -674,7 +674,7 @@ void vulkan_device_destroy(struct wlr_vk_device *dev) {
 	wlr_drm_format_set_finish(&dev->shm_texture_formats);
 
 	for (unsigned i = 0u; i < dev->format_prop_count; ++i) {
-		vulkan_format_props_finish(&dev->format_props[i]);
+		fx_vulkan_format_props_finish(&dev->format_props[i]);
 	}
 
 	free(dev->format_props);

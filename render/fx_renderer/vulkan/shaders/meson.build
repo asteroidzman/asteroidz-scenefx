@@ -21,4 +21,4 @@ foreach shader : vulkan_shaders_src
 	vulkan_shaders += [header]
 endforeach
 
-wlr_files += vulkan_shaders
+scenefx_files += vulkan_shaders

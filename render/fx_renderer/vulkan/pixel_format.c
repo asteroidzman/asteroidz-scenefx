@@ -7,7 +7,7 @@
 #include "render/pixel_format.h"
 #include "render/vulkan.h"
 
-static const struct wlr_vk_format formats[] = {
+static const struct fx_vk_format formats[] = {
 	// Vulkan non-packed 8-bits-per-channel formats have an inverted channel
 	// order compared to the DRM formats, because DRM format channel order
 	// is little-endian while Vulkan format channel order is in memory byte
@@ -235,12 +235,12 @@ static const struct wlr_vk_format formats[] = {
 	// Vulkan 1.3 or VK_EXT_ycbcr_2plane_444_formats)
 };
 
-const struct wlr_vk_format *vulkan_get_format_list(size_t *len) {
+const struct fx_vk_format *fx_vulkan_get_format_list(size_t *len) {
 	*len = sizeof(formats) / sizeof(formats[0]);
 	return formats;
 }
 
-const struct wlr_vk_format *vulkan_get_format_from_drm(uint32_t drm_format) {
+const struct fx_vk_format *fx_vulkan_get_format_from_drm(uint32_t drm_format) {
 	for (unsigned i = 0; i < sizeof(formats) / sizeof(formats[0]); ++i) {
 		if (formats[i].drm == drm_format) {
 			return &formats[i];
@@ -249,13 +249,13 @@ const struct wlr_vk_format *vulkan_get_format_from_drm(uint32_t drm_format) {
 	return NULL;
 }
 
-const VkImageUsageFlags vulkan_render_usage =
+const VkImageUsageFlags fx_vulkan_render_usage =
 	VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-const VkImageUsageFlags vulkan_shm_tex_usage =
+const VkImageUsageFlags fx_vulkan_shm_tex_usage =
 	VK_IMAGE_USAGE_SAMPLED_BIT |
 	VK_IMAGE_USAGE_TRANSFER_DST_BIT |
 	VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-const VkImageUsageFlags vulkan_dma_tex_usage =
+const VkImageUsageFlags fx_vulkan_dma_tex_usage =
 	VK_IMAGE_USAGE_SAMPLED_BIT |
 	VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 
@@ -279,10 +279,10 @@ static const VkFormatFeatureFlags ycbcr_tex_features =
 	VK_FORMAT_FEATURE_MIDPOINT_CHROMA_SAMPLES_BIT;
 
 // vk_format_variant should be set to 0=VK_FORMAT_UNDEFINED when not used
-static bool query_modifier_usage_support(struct wlr_vk_device *dev, VkFormat vk_format,
+static bool query_modifier_usage_support(struct fx_vk_device *dev, VkFormat vk_format,
 		VkFormat vk_format_variant, VkImageUsageFlags usage,
 		const VkDrmFormatModifierPropertiesEXT *m,
-		struct wlr_vk_format_modifier_props *out, const char **errmsg) {
+		struct fx_vk_format_modifier_props *out, const char **errmsg) {
 	VkResult res;
 	*errmsg = NULL;
 
@@ -330,7 +330,7 @@ static bool query_modifier_usage_support(struct wlr_vk_device *dev, VkFormat vk_
 		if (res == VK_ERROR_FORMAT_NOT_SUPPORTED) {
 			*errmsg = "unsupported format";
 		} else {
-			wlr_vk_error("vkGetPhysicalDeviceImageFormatProperties2", res);
+			fx_vk_error("vkGetPhysicalDeviceImageFormatProperties2", res);
 			*errmsg = "failed to get format properties";
 		}
 		return false;
@@ -340,7 +340,7 @@ static bool query_modifier_usage_support(struct wlr_vk_device *dev, VkFormat vk_
 	}
 
 	VkExtent3D me = ifmtp.imageFormatProperties.maxExtent;
-	*out = (struct wlr_vk_format_modifier_props){
+	*out = (struct fx_vk_format_modifier_props){
 		.props = *m,
 		.max_extent.width = me.width,
 		.max_extent.height = me.height,
@@ -348,7 +348,7 @@ static bool query_modifier_usage_support(struct wlr_vk_device *dev, VkFormat vk_
 	return true;
 }
 
-static bool query_shm_support(struct wlr_vk_device *dev, VkFormat vk_format,
+static bool query_shm_support(struct fx_vk_device *dev, VkFormat vk_format,
 		VkFormat vk_format_variant, VkImageFormatProperties *out,
 		const char **errmsg) {
 	VkResult res;
@@ -369,7 +369,7 @@ static bool query_shm_support(struct wlr_vk_device *dev, VkFormat vk_format,
 		.type = VK_IMAGE_TYPE_2D,
 		.format = vk_format,
 		.tiling = VK_IMAGE_TILING_OPTIMAL,
-		.usage = vulkan_shm_tex_usage,
+		.usage = fx_vulkan_shm_tex_usage,
 		.flags = vk_format_variant ? VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT : 0,
 		.pNext = &listi,
 	};
@@ -382,7 +382,7 @@ static bool query_shm_support(struct wlr_vk_device *dev, VkFormat vk_format,
 		if (res == VK_ERROR_FORMAT_NOT_SUPPORTED) {
 			*errmsg = "unsupported format";
 		} else {
-			wlr_vk_error("vkGetPhysicalDeviceImageFormatProperties2", res);
+			fx_vk_error("vkGetPhysicalDeviceImageFormatProperties2", res);
 			*errmsg = "failed to get format properties";
 		}
 		return false;
@@ -392,8 +392,8 @@ static bool query_shm_support(struct wlr_vk_device *dev, VkFormat vk_format,
 	return true;
 }
 
-static bool query_modifier_support(struct wlr_vk_device *dev,
-		struct wlr_vk_format_props *props, size_t modifier_count) {
+static bool query_modifier_support(struct fx_vk_device *dev,
+		struct fx_vk_format_props *props, size_t modifier_count) {
 	VkDrmFormatModifierPropertiesListEXT modp = {
 		.sType = VK_STRUCTURE_TYPE_DRM_FORMAT_MODIFIER_PROPERTIES_LIST_EXT,
 		.drmFormatModifierCount = modifier_count,
@@ -434,17 +434,17 @@ static bool query_modifier_support(struct wlr_vk_device *dev,
 		// check that specific modifier for render usage
 		const char *errmsg = "unknown error";
 		if ((m.drmFormatModifierTilingFeatures & render_features) == render_features &&
-				!vulkan_format_is_ycbcr(&props->format)) {
-			struct wlr_vk_format_modifier_props p = {0};
+				!fx_vulkan_format_is_ycbcr(&props->format)) {
+			struct fx_vk_format_modifier_props p = {0};
 			bool supported = false;
 			if (query_modifier_usage_support(dev, props->format.vk,
-					props->format.vk_srgb, vulkan_render_usage, &m, &p, &errmsg)) {
+					props->format.vk_srgb, fx_vulkan_render_usage, &m, &p, &errmsg)) {
 				supported = true;
 				p.has_mutable_srgb = props->format.vk_srgb != 0;
 			}
 			if (!supported && props->format.vk_srgb) {
 				supported = query_modifier_usage_support(dev, props->format.vk,
-					0, vulkan_render_usage, &m, &p, &errmsg);
+					0, fx_vulkan_render_usage, &m, &p, &errmsg);
 			}
 
 			if (supported) {
@@ -465,20 +465,20 @@ static bool query_modifier_support(struct wlr_vk_device *dev,
 		// check that specific modifier for texture usage
 		errmsg = "unknown error";
 		VkFormatFeatureFlags features = dma_tex_features;
-		if (vulkan_format_is_ycbcr(&props->format)) {
+		if (fx_vulkan_format_is_ycbcr(&props->format)) {
 			features |= ycbcr_tex_features;
 		}
 		if ((m.drmFormatModifierTilingFeatures & features) == features) {
-			struct wlr_vk_format_modifier_props p = {0};
+			struct fx_vk_format_modifier_props p = {0};
 			bool supported = false;
 			if (query_modifier_usage_support(dev, props->format.vk,
-					props->format.vk_srgb, vulkan_dma_tex_usage, &m, &p, &errmsg)) {
+					props->format.vk_srgb, fx_vulkan_dma_tex_usage, &m, &p, &errmsg)) {
 				supported = true;
 				p.has_mutable_srgb = props->format.vk_srgb != 0;
 			}
 			if (!supported && props->format.vk_srgb) {
 				supported = query_modifier_usage_support(dev, props->format.vk,
-					0, vulkan_dma_tex_usage, &m, &p, &errmsg);
+					0, fx_vulkan_dma_tex_usage, &m, &p, &errmsg);
 			}
 
 			if (supported) {
@@ -508,9 +508,9 @@ static bool query_modifier_support(struct wlr_vk_device *dev,
 	return found;
 }
 
-void vulkan_format_props_query(struct wlr_vk_device *dev,
-		const struct wlr_vk_format *format) {
-	if (vulkan_format_is_ycbcr(format) && !dev->sampler_ycbcr_conversion) {
+void fx_vulkan_format_props_query(struct fx_vk_device *dev,
+		const struct fx_vk_format *format) {
+	if (fx_vulkan_format_is_ycbcr(format) && !dev->sampler_ycbcr_conversion) {
 		return;
 	}
 
@@ -530,7 +530,7 @@ void vulkan_format_props_query(struct wlr_vk_device *dev,
 	vkGetPhysicalDeviceFormatProperties2(dev->phdev, format->vk, &fmtp);
 
 	bool add_fmt_props = false;
-	struct wlr_vk_format_props props = {0};
+	struct fx_vk_format_props props = {0};
 	props.format = *format;
 
 	const struct wlr_pixel_format_info *format_info = drm_get_pixel_format_info(format->drm);
@@ -539,7 +539,7 @@ void vulkan_format_props_query(struct wlr_vk_device *dev,
 	char shm_texture_status[256];
 	const char *errmsg = "unknown error";
 	if ((fmtp.formatProperties.optimalTilingFeatures & shm_tex_features) == shm_tex_features &&
-			!vulkan_format_is_ycbcr(format) && format_info != NULL) {
+			!fx_vulkan_format_is_ycbcr(format) && format_info != NULL) {
 		VkImageFormatProperties ifmtp;
 		bool supported = false, has_mutable_srgb = false;
 		if (query_shm_support(dev, format->vk, format->vk_srgb, &ifmtp, &errmsg)) {
@@ -581,19 +581,19 @@ void vulkan_format_props_query(struct wlr_vk_device *dev,
 		dev->format_props[dev->format_prop_count] = props;
 		++dev->format_prop_count;
 	} else {
-		vulkan_format_props_finish(&props);
+		fx_vulkan_format_props_finish(&props);
 	}
 }
 
-void vulkan_format_props_finish(struct wlr_vk_format_props *props) {
+void fx_vulkan_format_props_finish(struct fx_vk_format_props *props) {
 	free(props->dmabuf.texture_mods);
 	free(props->dmabuf.render_mods);
 }
 
-const struct wlr_vk_format_modifier_props *vulkan_format_props_find_modifier(
-		const struct wlr_vk_format_props *props, uint64_t mod, bool render) {
+const struct fx_vk_format_modifier_props *fx_vulkan_format_props_find_modifier(
+		const struct fx_vk_format_props *props, uint64_t mod, bool render) {
 	uint32_t len;
-	const struct wlr_vk_format_modifier_props *mods;
+	const struct fx_vk_format_modifier_props *mods;
 	if (render) {
 		len = props->dmabuf.render_mod_count;
 		mods = props->dmabuf.render_mods;
@@ -610,6 +610,6 @@ const struct wlr_vk_format_modifier_props *vulkan_format_props_find_modifier(
 	return NULL;
 }
 
-bool vulkan_format_is_ycbcr(const struct wlr_vk_format *format) {
+bool fx_vulkan_format_is_ycbcr(const struct fx_vk_format *format) {
 	return pixel_format_is_ycbcr(format->drm);
 }

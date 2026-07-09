@@ -40,20 +40,25 @@ present: `VK_EXT_image_drm_format_modifier`, `VK_EXT_physical_device_drm`,
   timeline semaphores, and grabs a graphics queue. It then returns NULL (no
   render path yet) so the caller uses GLES2 — verified end-to-end: the init
   runs and logs, and the compositor comes up.
-- **Phase 2 — render path (step 1, in progress).** Forking wlroots' Vulkan
+- **Phase 2 — render path (step 1: 1–3 done, 4 next).** Forked wlroots' Vulkan
   renderer as the `fx_vk` base. The wlroots 0.20.1 `render/vulkan/` sources
-  (renderer/pass/texture/vulkan/pixel_format/util .c), the internal headers it
-  needs (`render/vulkan.h`, `render/dmabuf.h`, `types/wlr_buffer.h`), and the
+  (renderer/pass/texture/vulkan/pixel_format/util .c), the internal headers and
+  helpers it needs (`render/vulkan.h`, `render/dmabuf.h`, `types/wlr_buffer.h`,
+  `util/rect_union.{h,c}`, the `dmabuf_*_sync_file` Linux helpers) and the
   SPIR-V shaders are vendored under `render/fx_renderer/vulkan/` +
-  `include/render/vulkan/`. Remaining for step 1:
-    1. rename `wlr_vk_*` / `vulkan_*` symbols to `fx_vk_*` so they don't clash
-       with the linked libwlroots;
-    2. meson wiring — build the vendored `.c` and generate the SPIR-V `.h`
-       (glslangValidator), align the vendored internal headers with scenefx's
-       forked `render/color.h` / `render/pixel_format.h`;
-    3. make `fx_vk_renderer_create_with_drm_fd()` return the real renderer;
-    4. implement scenefx's `fx_render_pass` on the Vulkan pass (effects as
-       no-ops first) so scenefx's scene works on Vulkan.
+  `include/render/vulkan/`. Status of step 1:
+    1. **done** — every `wlr_vk_*` / `vulkan_*` symbol (plus the `*_is_vk`
+       downcast helpers) renamed to `fx_vk_*` / `fx_vulkan_*` so nothing clashes
+       with the Vulkan renderer inside the linked libwlroots (`nm -D` shows only
+       `fx_vk_*` defined, zero `wlr_vk_*`);
+    2. **done** — meson wiring: `render/fx_renderer/vulkan/meson.build` builds
+       the vendored `.c` and `shaders/meson.build` generates the SPIR-V `.h` via
+       glslang. `-Drenderers=gles2,vulkan` builds `libscenefx-0.5.so` clean;
+       `-Drenderers=gles2` is unaffected (vulkan block fully guarded);
+    3. **done** — `fx_vk_renderer_create_with_drm_fd()` returns the real
+       renderer (`fx_vulkan_renderer_create_for_device`), exported from the .so;
+    4. **next** — implement scenefx's `fx_render_pass` on the Vulkan pass
+       (effects as no-ops first) so scenefx's scene works on Vulkan.
 - **Effect pipelines — TODO.** rounded corners → box shadow → blur → gradients
   → color LUT, each a SPIR-V port of the GLES shader.
 
