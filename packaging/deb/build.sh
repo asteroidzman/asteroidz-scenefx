@@ -48,7 +48,7 @@ VER="$(meson_version build)"
 DESTDIR="$REPO/pkgroot" meson install -C build
 fpm -s dir -t deb -f -n asteroidz-scenefx -v "$VER" --iteration 1 -a "$ARCH" \
   -m "$MAINTAINER" --license MIT \
-  --url https://github.com/ralfwierzbicki/asteroidz-scenefx \
+  --url https://github.com/asteroidzman/asteroidz-scenefx \
   --description "scenefx fork for asteroidz — wlroots effects library (GLES2 + Vulkan/fx_vk)" \
   -d "wlroots-0.20 (>= ${WLROOTS_TAG})" \
   -d libwayland-server0 -d libdrm2 -d libxkbcommon0 -d libpixman-1-0 \

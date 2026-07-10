@@ -2,7 +2,7 @@
 
 A fork of [SceneFX](https://github.com/wlrfx/scenefx) — the wlroots scene
 API with an fx renderer for blur, shadows, and rounded corners — extended
-to power the [asteroidz](https://github.com/ralfwierzbicki/asteroidz)
+to power the [asteroidz](https://github.com/asteroidzman/asteroidz)
 compositor's rendering pipeline. All credit for the foundation goes to the
 SceneFX authors and the wlroots project; this fork exists because asteroidz
 needed HDR and a handful of scene-level effects upstream doesn't have yet.
@@ -66,14 +66,14 @@ sudo pacman -S --needed base-devel git meson ninja \
   wlroots0.20 wayland wayland-protocols libdrm libxkbcommon pixman \
   vulkan-icd-loader vulkan-headers glslang
 
-git clone https://github.com/ralfwierzbicki/asteroidz-scenefx.git
+git clone https://github.com/asteroidzman/asteroidz-scenefx.git
 cd asteroidz-scenefx
 meson setup build --prefix=/usr -Drenderers=gles2,vulkan
 ninja -C build
 sudo ninja -C build install
 ```
 
-Then build [asteroidz](https://github.com/ralfwierzbicki/asteroidz)
+Then build [asteroidz](https://github.com/asteroidzman/asteroidz)
 itself — see its README for the compositor build.
 
 ## Credits
