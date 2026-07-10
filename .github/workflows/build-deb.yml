@@ -38,7 +38,8 @@ jobs:
             libinput-dev libudev-dev libgbm-dev libseat-dev hwdata libdisplay-info-dev \
             libvulkan-dev glslang-tools glslang-dev \
             libxcb1-dev libxcb-composite0-dev libxcb-icccm4-dev libxcb-res0-dev \
-            libxcb-ewmh-dev libxcb-render-util0-dev libxcb-errors-dev
+            libxcb-ewmh-dev libxcb-render0-dev libxcb-render-util0-dev \
+            libxcb-xfixes0-dev libxcb-errors-dev xwayland
           # names that vary across Ubuntu releases — try new, fall back to old
           apt-get install -y libegl-dev libgles-dev \
             || apt-get install -y libegl1-mesa-dev libgles2-mesa-dev
