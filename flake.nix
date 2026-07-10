@@ -19,13 +19,18 @@
 
       in {
         packages = rec {
-          scenefx-git = pkgs.stdenv.mkDerivation {
-            pname = "scenefx";
-            version = "git";
+          scenefx = pkgs.stdenv.mkDerivation {
+            pname = "asteroidz-scenefx";
+            version = "0.5.0";
             src = ./.;
             outputs = [
               "out"
               "lib"
+            ];
+
+            mesonFlags = [
+              "-Drenderers=gles2,vulkan"
+              "-Dexamples=false"
             ];
 
             nativeBuildInputs = with pkgs; [
@@ -35,6 +40,7 @@
               ninja
               scdoc
               wayland-scanner
+              glslang # compile the fx_vk shaders to SPIR-V
             ];
 
             buildInputs = with pkgs; [
@@ -50,17 +56,21 @@
               libxcb
               libxcb-wm
               lcms2
+              vulkan-loader # fx_vk renderer
+              vulkan-headers
             ];
 
             meta = with pkgs.lib; {
-              description = "A drop-in replacement for the wlroots scene API that allows wayland compositors to render surfaces with eye-candy effects";
-              homepage = "https://github.com/wlrfx/scenefx";
+              description = "scenefx fork for asteroidz — wlroots scene API with GLES2 and Vulkan (fx_vk) effects";
+              homepage = "https://github.com/asteroidzman/asteroidz-scenefx";
               license = licenses.mit;
               platforms = platforms.linux;
             };
           };
 
-          default = scenefx-git;
+          # Aliases: asteroidz imports `.scenefx`; keep the old name working too.
+          scenefx-git = scenefx;
+          default = scenefx;
 		};
 
         devShells.default = pkgs.mkShell {
