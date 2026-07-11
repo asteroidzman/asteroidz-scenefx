@@ -392,6 +392,17 @@ struct fx_vk_renderer {
 
 	VkCommandPool command_pool;
 
+	// Persistent pipeline cache (fx_vk fork): seeded from disk at create and
+	// written back on destroy so shader/pipeline compilation isn't repaid
+	// every session. VK_NULL_HANDLE if creation failed (falls back to none).
+	VkPipelineCache pipeline_cache;
+	// The compositor re-execs on restart without tearing the renderer down, so
+	// save-on-destroy alone loses the warmed cache (a crash would too). Mark
+	// dirty when a new pipeline is compiled and flush a short debounce of frames
+	// later, batching the startup burst into a single write.
+	bool pipeline_cache_dirty;
+	uint32_t pipeline_cache_idle_frames;
+
 	VkShaderModule vert_module;
 	VkShaderModule tex_frag_module;
 	VkShaderModule quad_frag_module;

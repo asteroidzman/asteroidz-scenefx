@@ -4,7 +4,9 @@
 #include <poll.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <drm_fourcc.h>
 #include <vulkan/vulkan.h>
@@ -1394,6 +1396,118 @@ static const struct wlr_drm_format_set *fx_vulkan_get_render_formats(
 	return &renderer->dev->dmabuf_render_formats;
 }
 
+// --- persistent pipeline cache (fx_vk fork) --------------------------------
+// Vulkan compiles pipelines (shaders) lazily on first use, so without a cache
+// that cost is repaid every session (startup + the first blur/shadow/rounded
+// draw). We persist the driver's VkPipelineCache blob to disk and reload it so
+// later runs warm-start. The blob carries a header the driver validates on
+// load (device/driver UUID etc.), so a stale or foreign file is safely ignored
+// rather than misused.
+static bool fx_vk_pipeline_cache_path(struct fx_vk_renderer *renderer,
+		char *out, size_t out_size) {
+	VkPhysicalDeviceProperties props;
+	vkGetPhysicalDeviceProperties(renderer->dev->phdev, &props);
+
+	char dir[4096];
+	const char *xdg = getenv("XDG_CACHE_HOME");
+	int r;
+	if (xdg && xdg[0] == '/') {
+		r = snprintf(dir, sizeof(dir), "%s/asteroidz-scenefx", xdg);
+	} else {
+		const char *home = getenv("HOME");
+		if (!home || home[0] != '/') {
+			return false;
+		}
+		r = snprintf(dir, sizeof(dir), "%s/.cache/asteroidz-scenefx", home);
+	}
+	if (r < 0 || (size_t)r >= sizeof(dir)) {
+		return false;
+	}
+	mkdir(dir, 0755); // best-effort; ignore EEXIST / parent-missing
+
+	// key by vendor/device so a multi-GPU setup doesn't cross the streams
+	r = snprintf(out, out_size, "%s/pipeline_cache-%04x-%04x.bin", dir,
+		props.vendorID, props.deviceID);
+	return r >= 0 && (size_t)r < out_size;
+}
+
+static void fx_vk_pipeline_cache_init(struct fx_vk_renderer *renderer) {
+	void *data = NULL;
+	size_t size = 0;
+	char path[4096];
+	if (fx_vk_pipeline_cache_path(renderer, path, sizeof(path))) {
+		FILE *f = fopen(path, "rb");
+		if (f) {
+			if (fseek(f, 0, SEEK_END) == 0) {
+				long len = ftell(f);
+				if (len > 0 && fseek(f, 0, SEEK_SET) == 0) {
+					data = malloc((size_t)len);
+					if (data && fread(data, 1, (size_t)len, f) == (size_t)len) {
+						size = (size_t)len;
+					} else {
+						free(data);
+						data = NULL;
+					}
+				}
+			}
+			fclose(f);
+		}
+	}
+
+	VkPipelineCacheCreateInfo info = {
+		.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO,
+		.initialDataSize = size,
+		.pInitialData = data,
+	};
+	VkResult res = vkCreatePipelineCache(renderer->dev->dev, &info, NULL,
+		&renderer->pipeline_cache);
+	if (res != VK_SUCCESS) {
+		fx_vk_error("vkCreatePipelineCache", res);
+		renderer->pipeline_cache = VK_NULL_HANDLE; // fall back to no cache
+	} else {
+		wlr_log(WLR_INFO, "fx_vk: pipeline cache %s (%zu bytes seed)",
+			size ? "loaded from disk" : "created empty", size);
+	}
+	free(data);
+}
+
+static void fx_vk_pipeline_cache_save(struct fx_vk_renderer *renderer) {
+	if (renderer->pipeline_cache == VK_NULL_HANDLE) {
+		return;
+	}
+	size_t size = 0;
+	if (vkGetPipelineCacheData(renderer->dev->dev, renderer->pipeline_cache,
+			&size, NULL) != VK_SUCCESS || size == 0) {
+		return;
+	}
+	void *data = malloc(size);
+	if (!data) {
+		return;
+	}
+	if (vkGetPipelineCacheData(renderer->dev->dev, renderer->pipeline_cache,
+			&size, data) == VK_SUCCESS) {
+		char path[4096], tmp[4096 + 8];
+		if (fx_vk_pipeline_cache_path(renderer, path, sizeof(path))) {
+			int r = snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+			if (r > 0 && (size_t)r < sizeof(tmp)) {
+				FILE *f = fopen(tmp, "wb");
+				if (f) {
+					bool ok = fwrite(data, 1, size, f) == size;
+					if (fclose(f) != 0) {
+						ok = false;
+					}
+					if (ok) {
+						rename(tmp, path); // atomic replace
+					} else {
+						unlink(tmp);
+					}
+				}
+			}
+		}
+	}
+	free(data);
+}
+
 static void fx_vulkan_destroy(struct wlr_renderer *wlr_renderer) {
 	struct fx_vk_renderer *renderer = fx_vulkan_get_renderer(wlr_renderer);
 	struct fx_vk_device *dev = renderer->dev;
@@ -1405,6 +1519,15 @@ static void fx_vulkan_destroy(struct wlr_renderer *wlr_renderer) {
 	VkResult res = vkDeviceWaitIdle(renderer->dev->dev);
 	if (res != VK_SUCCESS) {
 		fx_vk_error("vkDeviceWaitIdle", res);
+	}
+
+	// flush the warmed pipeline cache to disk, then tear it down (device is
+	// idle here, so all lazy pipeline builds for this session are captured)
+	fx_vk_pipeline_cache_save(renderer);
+	if (renderer->pipeline_cache != VK_NULL_HANDLE) {
+		vkDestroyPipelineCache(renderer->dev->dev, renderer->pipeline_cache,
+			NULL);
+		renderer->pipeline_cache = VK_NULL_HANDLE;
 	}
 
 	for (size_t i = 0; i < VULKAN_COMMAND_BUFFERS_CAP; i++) {
@@ -1771,6 +1894,16 @@ static struct wlr_render_pass *fx_vulkan_begin_buffer_pass(struct wlr_renderer *
 		if (!render_buffer) {
 			return NULL;
 		}
+	}
+
+	// Debounced flush of the pipeline cache: once compilation settles (no new
+	// pipeline for ~a second of frames), write it out so a re-exec/crash keeps
+	// the warmed cache. ~90 frames is a safe delay across common refresh rates.
+	if (renderer->pipeline_cache_dirty &&
+			++renderer->pipeline_cache_idle_frames >= 90) {
+		fx_vk_pipeline_cache_save(renderer);
+		renderer->pipeline_cache_dirty = false;
+		renderer->pipeline_cache_idle_frames = 0;
 	}
 
 	struct fx_vk_render_pass *render_pass = fx_vulkan_begin_render_pass(
@@ -2249,14 +2382,16 @@ struct fx_vk_pipeline *setup_get_or_create_pipeline(
 		.pVertexInputState = &vertex,
 	};
 
-	VkPipelineCache cache = VK_NULL_HANDLE;
-	res = vkCreateGraphicsPipelines(dev, cache, 1, &pinfo, NULL, &pipeline->vk);
+	res = vkCreateGraphicsPipelines(dev, renderer->pipeline_cache, 1, &pinfo,
+		NULL, &pipeline->vk);
 	if (res != VK_SUCCESS) {
 		fx_vk_error("failed to create vulkan pipelines:", res);
 		free(pipeline);
 		return NULL;
 	}
 
+	renderer->pipeline_cache_dirty = true; // flush the warmed cache soon
+	renderer->pipeline_cache_idle_frames = 0;
 	wl_list_insert(&setup->pipelines, &pipeline->link);
 	return pipeline;
 }
@@ -2366,13 +2501,15 @@ static bool init_blend_to_output_pipeline(struct fx_vk_renderer *renderer,
 		.pVertexInputState = &vertex,
 	};
 
-	VkPipelineCache cache = VK_NULL_HANDLE;
-	res = vkCreateGraphicsPipelines(dev, cache, 1, &pinfo, NULL, pipe);
+	res = vkCreateGraphicsPipelines(dev, renderer->pipeline_cache, 1, &pinfo,
+		NULL, pipe);
 	if (res != VK_SUCCESS) {
 		fx_vk_error("failed to create vulkan pipelines:", res);
 		return false;
 	}
 
+	renderer->pipeline_cache_dirty = true; // flush the warmed cache soon
+	renderer->pipeline_cache_idle_frames = 0;
 	return true;
 }
 
@@ -3151,6 +3288,10 @@ struct wlr_renderer *fx_vulkan_renderer_create_for_device(struct fx_vk_device *d
 	if (dev->drm_fd >= 0 && drmGetCap(dev->drm_fd, DRM_CAP_SYNCOBJ_TIMELINE, &cap_syncobj_timeline) == 0) {
 		renderer->wlr_renderer.features.timeline = dev->sync_file_import_export && cap_syncobj_timeline != 0;
 	}
+
+	// seed the pipeline cache from disk before any pipelines are built
+	// (init_static_render_data creates the blend-to-output pipelines)
+	fx_vk_pipeline_cache_init(renderer);
 
 	if (!init_static_render_data(renderer)) {
 		goto error;
