@@ -32,4 +32,21 @@ foreach shader : vulkan_shaders_src
 	vulkan_shaders += [header]
 endforeach
 
+# fp16-arithmetic variants of the blur compute kernels (used when the device
+# enables shaderFloat16; see init_blur_compute).
+foreach shader : ['blur1.comp', 'blur2.comp']
+	name = shader.underscorify() + '_fp16_data'
+	args = [glslang, '-V', '-DUSE_FP16=1', '@INPUT@', '-o', '@OUTPUT@', '--vn', name]
+	if glslang_version.version_compare('>=11.0.0')
+		args += '--quiet'
+	endif
+	header = custom_target(
+		shader + '_fp16_spv',
+		output: shader + '.fp16.h',
+		input: shader,
+		command: args)
+
+	vulkan_shaders += [header]
+endforeach
+
 scenefx_files += vulkan_shaders

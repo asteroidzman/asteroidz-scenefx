@@ -44,6 +44,8 @@ struct fx_vk_device {
 	bool sync_file_import_export;
 	bool implicit_sync_interop;
 	bool sampler_ycbcr_conversion;
+	// VK_KHR_shader_float16_int8 shaderFloat16 enabled (fp16 blur kernels)
+	bool shader_float16;
 
 	// we only ever need one queue for rendering and transfer commands
 	uint32_t queue_family;
@@ -369,9 +371,13 @@ void fx_vk_effect_buffers_destroy(struct fx_vk_effect_buffers *bufs);
 // active (it drives its own render passes between main-pass segments).
 struct blur_data;
 struct fx_vk_render_pass; // defined below
+// region: pre-padded write/copy region (see fx_vk_blur_padded_region) or
+// NULL for the whole buffer.
 struct fx_vk_effect_image *fx_vk_render_pass_blur(struct fx_vk_render_pass *pass,
 	struct fx_vk_effect_buffers *bufs, struct fx_vk_effect_image *source,
-	const struct blur_data *blur_data);
+	const struct blur_data *blur_data, const struct wlr_box *region);
+struct wlr_box fx_vk_blur_padded_region(struct fx_vk_effect_buffers *bufs,
+	const struct blur_data *blur_data, const struct wlr_box *box);
 
 struct fx_vk_command_buffer {
 	VkCommandBuffer vk;
@@ -583,12 +589,13 @@ struct fx_vk_blur_pcr {
 };
 
 // Compute-blur push block (offset 0, VK_SHADER_STAGE_COMPUTE_BIT): the
-// graphics block plus the write-region extent in pixels -- the compute
-// replacement for the graphics path's scaled scissor. Matches the UBO in
-// blur1.comp / blur2.comp (std430: uvec2 at offset 32, total 40 bytes).
+// graphics block plus the write-region offset/extent in pixels -- the
+// compute replacement for the graphics path's scaled scissor rect. Matches
+// the UBO in blur1.comp / blur2.comp (std430: uvec2 at 32 and 40, total 48).
 struct fx_vk_blur_compute_pcr {
 	struct fx_vk_blur_pcr base;
 	uint32_t extent[2];
+	uint32_t offset[2];
 };
 
 // Per-draw transparency-mask parameters for the masked per-window/layer blur

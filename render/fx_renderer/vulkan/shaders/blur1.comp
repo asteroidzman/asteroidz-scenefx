@@ -1,5 +1,17 @@
 #version 450
 
+#if defined(USE_FP16)
+// Half-precision tap accumulation (shaderFloat16): ~2x ALU throughput on
+// packed-math GPUs. The source data is 16F already, so no quality loss; the
+// effects path (pow/gamma) stays fp32.
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#define HVEC4 f16vec4
+#define HF float16_t
+#else
+#define HVEC4 vec4
+#define HF float
+#endif
+
 // scenefx dual-Kawase downsample, compute variant (fx_vk fork). Same kernel
 // and coordinate math as blur1.frag: one invocation per destination pixel in
 // the scaled-down region (data.extent, the graphics path's scissor), sampling
@@ -24,22 +36,24 @@ layout(push_constant) uniform UBO {
 	float saturation;
 	float noise;
 	uvec2 extent;
+	uvec2 offset;
 } data;
 
 void main() {
-	uvec2 px = gl_GlobalInvocationID.xy;
-	if (px.x >= data.extent.x || px.y >= data.extent.y) {
+	if (gl_GlobalInvocationID.x >= data.extent.x ||
+			gl_GlobalInvocationID.y >= data.extent.y) {
 		return;
 	}
+	uvec2 px = data.offset + gl_GlobalInvocationID.xy;
 	// Same uv the full-buffer quad produces at this fragment position.
 	vec2 uv = (vec2(px) + 0.5) / vec2(imageSize(out_img));
 	vec2 c = uv * 2.0;
 
-	vec4 sum = texture(tex, c) * 4.0;
-	sum += texture(tex, c - data.halfpixel.xy * data.radius);
-	sum += texture(tex, c + data.halfpixel.xy * data.radius);
-	sum += texture(tex, c + vec2(data.halfpixel.x, -data.halfpixel.y) * data.radius);
-	sum += texture(tex, c - vec2(data.halfpixel.x, -data.halfpixel.y) * data.radius);
+	HVEC4 sum = HVEC4(texture(tex, c)) * HF(4.0);
+	sum += HVEC4(texture(tex, c - data.halfpixel.xy * data.radius));
+	sum += HVEC4(texture(tex, c + data.halfpixel.xy * data.radius));
+	sum += HVEC4(texture(tex, c + vec2(data.halfpixel.x, -data.halfpixel.y) * data.radius));
+	sum += HVEC4(texture(tex, c - vec2(data.halfpixel.x, -data.halfpixel.y) * data.radius));
 
-	imageStore(out_img, ivec2(px), sum / 8.0);
+	imageStore(out_img, ivec2(px), vec4(sum) / 8.0);
 }

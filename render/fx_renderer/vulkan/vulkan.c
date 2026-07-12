@@ -546,15 +546,31 @@ struct fx_vk_device *fx_vulkan_device_create(struct fx_vk_instance *ini,
 	VkPhysicalDeviceSamplerYcbcrConversionFeatures phdev_sampler_ycbcr_features = {
 		.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SAMPLER_YCBCR_CONVERSION_FEATURES,
 	};
+	// fp16 arithmetic for the blur compute kernels (scenefx fx_vk fork)
+	VkPhysicalDeviceShaderFloat16Int8FeaturesKHR phdev_float16_features = {
+		.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES_KHR,
+		.pNext = &phdev_sampler_ycbcr_features,
+	};
+	bool has_float16_ext = check_extension(avail_ext_props, avail_extc,
+		VK_KHR_SHADER_FLOAT16_INT8_EXTENSION_NAME);
 	VkPhysicalDeviceFeatures2 phdev_features = {
 		.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
-		.pNext = &phdev_sampler_ycbcr_features,
+		.pNext = has_float16_ext ? (void *)&phdev_float16_features
+			: (void *)&phdev_sampler_ycbcr_features,
 	};
 	vkGetPhysicalDeviceFeatures2(phdev, &phdev_features);
 
 	dev->sampler_ycbcr_conversion = phdev_sampler_ycbcr_features.samplerYcbcrConversion;
 	wlr_log(WLR_DEBUG, "Sampler YCbCr conversion %s",
 		dev->sampler_ycbcr_conversion ? "supported" : "not supported");
+
+	dev->shader_float16 = has_float16_ext &&
+		phdev_float16_features.shaderFloat16;
+	if (dev->shader_float16) {
+		extensions[extensions_len++] = VK_KHR_SHADER_FLOAT16_INT8_EXTENSION_NAME;
+	}
+	wlr_log(WLR_DEBUG, "shaderFloat16 %s",
+		dev->shader_float16 ? "supported" : "not supported");
 
 	const float prio = 1.f;
 	VkDeviceQueueCreateInfo qinfo = {
@@ -595,9 +611,15 @@ struct fx_vk_device *fx_vulkan_device_create(struct fx_vk_instance *ini,
 		.pNext = &sync2_features,
 		.timelineSemaphore = VK_TRUE,
 	};
+	VkPhysicalDeviceShaderFloat16Int8FeaturesKHR float16_features = {
+		.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES_KHR,
+		.pNext = &timeline_features,
+		.shaderFloat16 = VK_TRUE,
+	};
 	VkDeviceCreateInfo dev_info = {
 		.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
-		.pNext = &timeline_features,
+		.pNext = dev->shader_float16 ? (void *)&float16_features
+			: (void *)&timeline_features,
 		.queueCreateInfoCount = 1u,
 		.pQueueCreateInfos = &qinfo,
 		.enabledExtensionCount = extensions_len,

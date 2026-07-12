@@ -35,6 +35,8 @@
 #include "blur2.frag.h"
 #include "blur1.comp.h"
 #include "blur2.comp.h"
+#include "blur1.comp.fp16.h"
+#include "blur2.comp.fp16.h"
 #include "blur_effects.frag.h"
 #include "quad_grad_round.frag.h"
 #include "texture_mask_round.frag.h"
@@ -2882,10 +2884,14 @@ static bool init_blur_compute(struct fx_vk_renderer *renderer) {
 		return true;
 	}
 
+	// Prefer the fp16-arithmetic kernels when the device enabled
+	// shaderFloat16 (~2x ALU on packed-math GPUs, no quality loss on 16F
+	// data); same source, compiled with -DUSE_FP16.
+	bool fp16 = renderer->dev->shader_float16;
 	VkShaderModuleCreateInfo sinfo = {
 		.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-		.codeSize = sizeof(blur1_comp_data),
-		.pCode = blur1_comp_data,
+		.codeSize = fp16 ? sizeof(blur1_comp_fp16_data) : sizeof(blur1_comp_data),
+		.pCode = fp16 ? blur1_comp_fp16_data : blur1_comp_data,
 	};
 	res = vkCreateShaderModule(dev, &sinfo, NULL, &renderer->blur1_comp_module);
 	if (res != VK_SUCCESS) {
@@ -2894,8 +2900,8 @@ static bool init_blur_compute(struct fx_vk_renderer *renderer) {
 	}
 	sinfo = (VkShaderModuleCreateInfo){
 		.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-		.codeSize = sizeof(blur2_comp_data),
-		.pCode = blur2_comp_data,
+		.codeSize = fp16 ? sizeof(blur2_comp_fp16_data) : sizeof(blur2_comp_data),
+		.pCode = fp16 ? blur2_comp_fp16_data : blur2_comp_data,
 	};
 	res = vkCreateShaderModule(dev, &sinfo, NULL, &renderer->blur2_comp_module);
 	if (res != VK_SUCCESS) {
@@ -3006,7 +3012,8 @@ static bool init_blur_compute(struct fx_vk_renderer *renderer) {
 	renderer->pipeline_cache_dirty = true;
 
 	renderer->blur_compute_ok = true;
-	wlr_log(WLR_INFO, "fx_vk: compute dual-Kawase blur enabled");
+	wlr_log(WLR_INFO, "fx_vk: compute dual-Kawase blur enabled (%s kernels)",
+		fp16 ? "fp16" : "fp32");
 	return true;
 }
 

@@ -37,18 +37,27 @@ mat4 contrastMatrix() {
 				t, t, t, 1);
 }
 
-mat4 saturationMatrix() {
-	vec3 luminance = vec3(0.3086, 0.6094, 0.0820) * (1.0 - data.saturation);
-	vec3 red = vec3(luminance.x);
-	red.x += data.saturation;
-	vec3 green = vec3(luminance.y);
-	green.y += data.saturation;
-	vec3 blue = vec3(luminance.z);
-	blue.z += data.saturation;
-	return mat4(red, 0,
-				green, 0,
-				blue, 0,
-				0, 0, 0, 1);
+vec3 linear_to_oklab(vec3 c) {
+	float l = dot(vec3(0.4122214708, 0.5363325363, 0.0514459929), c);
+	float m = dot(vec3(0.2119034982, 0.6806995451, 0.1073969566), c);
+	float s = dot(vec3(0.0883024619, 0.2817188376, 0.6299787005), c);
+	vec3 lms = pow(max(vec3(l, m, s), vec3(0.0)), vec3(1.0 / 3.0));
+	return vec3(
+		dot(vec3(0.2104542553, 0.7936177850, -0.0040720468), lms),
+		dot(vec3(1.9779984951, -2.4285922050, 0.4505937099), lms),
+		dot(vec3(0.0259040371, 0.7827717662, -0.8086757660), lms));
+}
+
+vec3 oklab_to_linear(vec3 lab) {
+	vec3 lms = vec3(
+		lab.x + 0.3963377774 * lab.y + 0.2158037573 * lab.z,
+		lab.x - 0.1055613458 * lab.y - 0.0638541728 * lab.z,
+		lab.x - 0.0894841775 * lab.y - 1.2914855480 * lab.z);
+	lms = lms * lms * lms;
+	return vec3(
+		dot(vec3(4.0767416621, -3.3077115913, 0.2309699292), lms),
+		dot(vec3(-1.2684380046, 2.6097574011, -0.3413193965), lms),
+		dot(vec3(-0.0041960863, -0.7034186147, 1.7076147010), lms));
 }
 
 float noiseAmount(vec2 p) {
@@ -69,9 +78,16 @@ float noiseAmount(vec2 p) {
 vec4 apply_blur_effects(vec4 color, vec2 p) {
 	float a = color.a;
 	vec3 rgb = a > 0.0 ? color.rgb / a : vec3(0.0);
+	// Saturation via Oklab chroma scaling on the LINEAR values: unlike the
+	// legacy RGB matrix it neither shifts hue nor distorts luminance as
+	// chroma grows (saturation > 1).
+	if (data.saturation != 1.0) {
+		vec3 lab = linear_to_oklab(max(rgb, vec3(0.0)));
+		lab.yz *= data.saturation;
+		rgb = max(oklab_to_linear(lab), vec3(0.0));
+	}
 	rgb = pow(max(rgb, vec3(0.0)), vec3(1.0 / 2.2));
-	vec4 c4 = brightnessMatrix() * contrastMatrix() * saturationMatrix()
-		* vec4(rgb, 1.0);
+	vec4 c4 = brightnessMatrix() * contrastMatrix() * vec4(rgb, 1.0);
 	rgb = max(c4.rgb, vec3(0.0)) + vec3(noiseAmount(p));
 	rgb = pow(max(rgb, vec3(0.0)), vec3(2.2));
 	return vec4(rgb * a, a);
