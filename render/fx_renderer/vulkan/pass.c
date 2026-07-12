@@ -1920,33 +1920,55 @@ void fx_vk_render_pass_add_blur(struct wlr_render_pass *wlr_pass,
 		return;
 	}
 	struct fx_vk_effect_buffers *bufs = pass->effect_buffers;
-	// Bail gracefully if there's no valid cached background blur (optimized
-	// blur never ran / disabled); draw nothing rather than crash.
-	if (bufs == NULL || !bufs->optimized_blur_valid) {
+	// Live blur only needs the effect buffers; the cache-backed paths below
+	// also need a valid cached background blur. Bail rather than crash.
+	if (bufs == NULL) {
 		return;
 	}
+
 
 	struct fx_render_texture_options *tex_options = &options->tex_options;
 	struct wlr_box dst_box = tex_options->base.dst_box;
 	float alpha = tex_options->base.alpha != NULL ?
 		*tex_options->base.alpha : 1.0f;
 
-	// Source is the cached full-strength background blur. For blur_strength < 1
-	// (e.g. unfocused windows, config unfocused-strength) re-blur the unblurred
-	// snapshot at reduced strength instead — matches GLES fx_render_pass_add_blur
-	// (use_optimized_blur + has_strength -> re-blur optimized_no_blur). Needs a
-	// scene-pass split since the blur passes run with no render pass active.
+	// Source selection, mirroring GLES fx_render_pass_add_blur:
+	// - optimized nodes at full strength: the cached bottom-layer blur.
+	// - optimized nodes at reduced strength: re-blur the unblurred snapshot.
+	// - LIVE nodes (should_only_blur_bottom_layer == false, e.g. layer-shell
+	//   panels/popups and overview windows): blur the CURRENT scene image --
+	//   "content so far" -- NOT the bottom-layer cache. Sampling the cache here
+	//   showed the raw wallpaper through anything drawn above the bottom layer
+	//   (dim scrims, windows under a bar): the DMS spotlight's blur region
+	//   glowed undimmed at its edges whenever the screen around it was dimmed.
+	// Each non-cache source needs a scene-pass split (blur passes run with no
+	// render pass active).
 	struct fx_vk_effect_image *src = bufs->optimized_blur;
-	if (options->blur_strength < 1.0f && options->blur_data != NULL &&
-			pass->two_pass) {
+	if (options->blur_data != NULL && pass->two_pass) {
 		struct blur_data bd =
 			blur_data_apply_strength(options->blur_data, options->blur_strength);
-		if (is_scene_blur_enabled(&bd)) {
+		if (!options->use_optimized_blur && is_scene_blur_enabled(&bd)) {
+			VkCommandBuffer cb = pass->command_buffer->vk;
+			vkCmdEndRenderPass(cb);
+			pass->bound_pipeline = VK_NULL_HANDLE;
+			/* snapshot the live scene into the ping-pong set's spare image
+			 * (effects buffers are about to be overwritten by the blur anyway;
+			 * optimized_no_blur must stay intact for strength re-blurs) */
+			copy_effect_image(pass, pass->render_buffer->two_pass.blend_image,
+				bufs->effects->image, bufs->width, bufs->height);
+			src = fx_vk_render_pass_blur(pass, bufs, bufs->effects, &bd);
+			begin_scene_pass_reload(pass);
+		} else if (options->blur_strength < 1.0f && is_scene_blur_enabled(&bd)) {
 			vkCmdEndRenderPass(pass->command_buffer->vk);
 			pass->bound_pipeline = VK_NULL_HANDLE;
 			src = fx_vk_render_pass_blur(pass, bufs, bufs->optimized_no_blur, &bd);
 			begin_scene_pass_reload(pass);
 		}
+	}
+	// Whatever path we took, never composite an invalid cache image (optimized
+	// blur never ran / single-pass fallback for a live node).
+	if (src == bufs->optimized_blur && !bufs->optimized_blur_valid) {
+		return;
 	}
 
 	// ignore_transparent: a transparency-mask surface is attached (e.g. blur
