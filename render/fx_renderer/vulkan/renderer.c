@@ -1214,7 +1214,8 @@ struct fx_vk_effect_image *fx_vk_effect_image_create(
 			VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
 	};
 	vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-		VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+		VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT |
+			(renderer->blur_compute_ok ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT : 0),
 		0, 0, NULL, 0, NULL, 1, &init_barrier);
 
 	return img;
@@ -1288,6 +1289,7 @@ struct fx_vk_effect_buffers *fx_vk_effect_buffers_get(
 		fx_vk_effect_image_destroy(bufs->optimized_blur);
 		fx_vk_effect_image_destroy(bufs->optimized_no_blur);
 		fx_vk_effect_image_destroy(bufs->blur_saved_pixels);
+		fx_vk_effect_image_destroy(bufs->blur_chain);
 		free(bufs);
 		return NULL;
 	}
