@@ -357,6 +357,14 @@ struct wlr_scene_output {
 	// for ABI compatibility.
 	float zoom;
 	double zoom_lx, zoom_ly;
+
+	// Reference-white luminance (cd/m²) of the blend space for the current
+	// combined color transform: the output stage encodes a blend-space value
+	// of 1.0 to this many nits. Only set (> 0) when the combined transform was
+	// built from an output image description; absolute-luminance (PQ) source
+	// content must be normalized against this same reference so composition
+	// is luminance-neutral with direct scanout. Appended for ABI compatibility.
+	float blend_reference_luminance;
 };
 
 struct wlr_scene_timer {

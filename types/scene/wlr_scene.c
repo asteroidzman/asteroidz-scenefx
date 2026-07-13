@@ -2323,6 +2323,17 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 			scene_buffer->transfer_function, &src_lum);
 		wlr_color_transfer_function_get_default_luminance(
 			WLR_COLOR_TRANSFER_FUNCTION_SRGB, &srgb_lum);
+		// PQ buffers carry absolute luminance: composition must reproduce the
+		// same nits direct scanout would. The output stage encodes blend-space
+		// 1.0 to blend_reference_luminance nits (sdr_reference_luminance when
+		// configured), so normalize PQ content against that same reference
+		// instead of PQ's fixed 203-nit default; otherwise composited HDR
+		// video is scaled by sdr_reference/203. SDR (relative) content keeps
+		// the reference-white-to-reference-white mapping.
+		if (scene_buffer->transfer_function == WLR_COLOR_TRANSFER_FUNCTION_ST2084_PQ &&
+				data->output->blend_reference_luminance > 0) {
+			src_lum.reference = data->output->blend_reference_luminance;
+		}
 		float luminance_multiplier = get_luminance_multiplier(&src_lum, &srgb_lum);
 
 		struct fx_render_texture_options tex_options = {
@@ -3293,6 +3304,7 @@ static bool scene_output_combine_color_transforms(
 	struct wlr_color_transform *color_matrix = NULL;
 	struct wlr_color_transform *inv_eotf = NULL;
 	struct wlr_color_transform *user_gamma = NULL;
+	float blend_reference = 0;
 
 	if (img_desc != NULL) {
 		assert(supplied == NULL);
@@ -3311,6 +3323,7 @@ static bool scene_output_combine_color_transforms(
 		if (sdr_reference > 0) {
 			dst_lum.reference = sdr_reference;
 		}
+		blend_reference = dst_lum.reference;
 		float luminance_multiplier = get_luminance_multiplier(&srgb_lum, &dst_lum);
 		for (int i = 0; i < 9; ++i) {
 			matrix[i] *= luminance_multiplier;
@@ -3377,6 +3390,7 @@ static bool scene_output_combine_color_transforms(
 	scene_output->prev_supplied_color_transform = supplied ? wlr_color_transform_ref(supplied) : NULL;
 	wlr_color_transform_unref(scene_output->combined_color_transform);
 	scene_output->combined_color_transform = combined;
+	scene_output->blend_reference_luminance = blend_reference;
 
 	result = true;
 
@@ -3657,6 +3671,7 @@ bool wlr_scene_output_build_state(struct wlr_scene_output *scene_output,
 			scene_output->prev_supplied_color_transform = NULL;
 			wlr_color_transform_unref(scene_output->combined_color_transform);
 			scene_output->combined_color_transform = NULL;
+			scene_output->blend_reference_luminance = 0;
 		} else if (!scene_output_combine_color_transforms(scene_output,
 				options->color_transform, output_description, render_gamma_lut)) {
 			wlr_buffer_unlock(buffer);
