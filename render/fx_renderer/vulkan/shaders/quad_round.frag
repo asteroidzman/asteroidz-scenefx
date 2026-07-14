@@ -31,34 +31,11 @@ float get_dist(vec2 q, float radius) {
 // the caller from box_pos so it is independent of the projection's flip.
 float corner_alpha(vec2 relative_pos, vec2 size, bool is_cutout,
 		float radius_tl, float radius_tr, float radius_bl, float radius_br) {
-	if (radius_tl <= 0.0 && radius_tr <= 0.0
-			&& radius_bl <= 0.0 && radius_br <= 0.0) {
-		return 1.0;
-	}
-
-	if (relative_pos.x < 0.0 || relative_pos.y < 0.0
-			|| relative_pos.x > size.x || relative_pos.y > size.y) {
-		if (is_cutout) {
-			return 1.0;
-		}
-		discard;
-	}
-
-	bool is_top_left = radius_tl > 0.0
-		&& relative_pos.x <= radius_tl && relative_pos.y <= radius_tl;
-	bool is_top_right = radius_tr > 0.0
-		&& relative_pos.x >= size.x - radius_tr && relative_pos.y <= radius_tr;
-	bool is_bottom_left = radius_bl > 0.0
-		&& relative_pos.x <= radius_bl && relative_pos.y >= size.y - radius_bl;
-	bool is_bottom_right = radius_br > 0.0
-		&& relative_pos.x >= size.x - radius_br && relative_pos.y >= size.y - radius_br;
-	if (!is_top_left && !is_top_right && !is_bottom_left && !is_bottom_right) {
-		if (is_cutout) {
-			discard;
-		}
-		return 1.0;
-	}
-
+	// The SDF and its fwidth() run unconditionally, before any exit: discard
+	// is OpKill and kills neighbouring quad invocations, leaving fwidth(dist)
+	// undefined for quads straddling the box edge or a corner-region seam —
+	// and for any corner_alpha() call made after it. Hence the exits below
+	// also return zero coverage instead of discarding.
 	vec2 top_left = abs(relative_pos - size) - size + radius_tl;
 	vec2 top_right = abs(relative_pos - vec2(0, size.y)) - size + radius_tr;
 	vec2 bottom_left = abs(relative_pos - vec2(size.x, 0)) - size + radius_bl;
@@ -71,10 +48,34 @@ float corner_alpha(vec2 relative_pos, vec2 size, bool is_cutout,
 
 	// Derivative-scaled anti-aliasing: ~1 DEVICE pixel of smoothing however
 	// the box is scaled (output scale, overview thumbnails), instead of a
-	// fixed 1 layout-unit band. Helper invocations keep fwidth defined.
+	// fixed 1 layout-unit band.
 	float aa = max(fwidth(dist), 1e-4);
 	float result = smoothstep(0.0, aa, dist);
-	return is_cutout ? result : 1.0 - result;
+	float arc = is_cutout ? result : 1.0 - result;
+
+	if (radius_tl <= 0.0 && radius_tr <= 0.0
+			&& radius_bl <= 0.0 && radius_br <= 0.0) {
+		return 1.0;
+	}
+
+	if (relative_pos.x < 0.0 || relative_pos.y < 0.0
+			|| relative_pos.x > size.x || relative_pos.y > size.y) {
+		return is_cutout ? 1.0 : 0.0;
+	}
+
+	bool is_top_left = radius_tl > 0.0
+		&& relative_pos.x <= radius_tl && relative_pos.y <= radius_tl;
+	bool is_top_right = radius_tr > 0.0
+		&& relative_pos.x >= size.x - radius_tr && relative_pos.y <= radius_tr;
+	bool is_bottom_left = radius_bl > 0.0
+		&& relative_pos.x <= radius_bl && relative_pos.y >= size.y - radius_bl;
+	bool is_bottom_right = radius_br > 0.0
+		&& relative_pos.x >= size.x - radius_br && relative_pos.y >= size.y - radius_br;
+	if (!is_top_left && !is_top_right && !is_bottom_left && !is_bottom_right) {
+		return is_cutout ? 0.0 : 1.0;
+	}
+
+	return arc;
 }
 
 void main() {
