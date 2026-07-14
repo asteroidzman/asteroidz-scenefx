@@ -278,6 +278,14 @@ static const VkFormatFeatureFlags ycbcr_tex_features =
 	VK_FORMAT_FEATURE_SAMPLED_IMAGE_YCBCR_CONVERSION_LINEAR_FILTER_BIT |
 	VK_FORMAT_FEATURE_MIDPOINT_CHROMA_SAMPLES_BIT;
 
+/* linux-dmabuf advertises format+modifier pairs with no way to express a
+ * per-modifier size cap, so a client may allocate any size with anything
+ * we advertise. RADV caps DCC-compressed modifiers at 2560x2560, which
+ * real surfaces exceed (a 4K gamescope buffer fails to import). Keep such
+ * modifiers importable for buffers that do fit, but only ADVERTISE
+ * modifiers that can hold any plausible surface (8K). */
+static const uint32_t advertise_min_extent = 8192;
+
 // vk_format_variant should be set to 0=VK_FORMAT_UNDEFINED when not used
 static bool query_modifier_usage_support(struct fx_vk_device *dev, VkFormat vk_format,
 		VkFormat vk_format_variant, VkImageUsageFlags usage,
@@ -430,6 +438,7 @@ static bool query_modifier_support(struct fx_vk_device *dev,
 	for (uint32_t i = 0; i < modp.drmFormatModifierCount; ++i) {
 		VkDrmFormatModifierPropertiesEXT m = modp.pDrmFormatModifierProperties[i];
 		char render_status[256], texture_status[256];
+		VkExtent2D render_max = {0, 0}, tex_max = {0, 0};
 
 		// check that specific modifier for render usage
 		const char *errmsg = "unknown error";
@@ -449,9 +458,13 @@ static bool query_modifier_support(struct fx_vk_device *dev,
 
 			if (supported) {
 				props->dmabuf.render_mods[props->dmabuf.render_mod_count++] = p;
-				wlr_drm_format_set_add(&dev->dmabuf_render_formats,
-					props->format.drm, m.drmFormatModifier);
+				if (p.max_extent.width >= advertise_min_extent &&
+						p.max_extent.height >= advertise_min_extent) {
+					wlr_drm_format_set_add(&dev->dmabuf_render_formats,
+						props->format.drm, m.drmFormatModifier);
+				}
 				found = true;
+				render_max = p.max_extent;
 			}
 		} else {
 			errmsg = "missing required features";
@@ -459,7 +472,8 @@ static bool query_modifier_support(struct fx_vk_device *dev,
 		if (errmsg != NULL) {
 			snprintf(render_status, sizeof(render_status), "✗ render (%s)", errmsg);
 		} else {
-			snprintf(render_status, sizeof(render_status), "✓ render");
+			snprintf(render_status, sizeof(render_status), "✓ render (max %"PRIu32"x%"PRIu32")",
+				render_max.width, render_max.height);
 		}
 
 		// check that specific modifier for texture usage
@@ -483,9 +497,13 @@ static bool query_modifier_support(struct fx_vk_device *dev,
 
 			if (supported) {
 				props->dmabuf.texture_mods[props->dmabuf.texture_mod_count++] = p;
-				wlr_drm_format_set_add(&dev->dmabuf_texture_formats,
-					props->format.drm, m.drmFormatModifier);
+				if (p.max_extent.width >= advertise_min_extent &&
+						p.max_extent.height >= advertise_min_extent) {
+					wlr_drm_format_set_add(&dev->dmabuf_texture_formats,
+						props->format.drm, m.drmFormatModifier);
+				}
 				found = true;
+				tex_max = p.max_extent;
 			}
 		} else {
 			errmsg = "missing required features";
@@ -493,7 +511,8 @@ static bool query_modifier_support(struct fx_vk_device *dev,
 		if (errmsg != NULL) {
 			snprintf(texture_status, sizeof(texture_status), "✗ texture (%s)", errmsg);
 		} else {
-			snprintf(texture_status, sizeof(texture_status), "✓ texture");
+			snprintf(texture_status, sizeof(texture_status), "✓ texture (max %"PRIu32"x%"PRIu32")",
+				tex_max.width, tex_max.height);
 		}
 
 		char *modifier_name = drmGetFormatModifierName(m.drmFormatModifier);

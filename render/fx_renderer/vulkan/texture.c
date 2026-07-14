@@ -536,8 +536,16 @@ VkImage fx_vulkan_import_dmabuf(struct fx_vk_renderer *renderer,
 
 	if ((uint32_t) attribs->width > mod->max_extent.width ||
 			(uint32_t) attribs->height > mod->max_extent.height) {
-		wlr_log(WLR_ERROR, "DMA-BUF is too large to import (%"PRIi32"x%"PRIi32" > %"PRIu32"x%"PRIu32")",
-			attribs->width, attribs->height, mod->max_extent.width, mod->max_extent.height);
+		char *format_name = drmGetFormatName(attribs->format);
+		char *modifier_name = drmGetFormatModifierName(attribs->modifier);
+		wlr_log(WLR_ERROR, "DMA-BUF is too large to import "
+			"(%"PRIi32"x%"PRIi32" > %"PRIu32"x%"PRIu32" for %s / %s)",
+			attribs->width, attribs->height,
+			mod->max_extent.width, mod->max_extent.height,
+			format_name ? format_name : "<unknown>",
+			modifier_name ? modifier_name : "<unknown>");
+		free(format_name);
+		free(modifier_name);
 		return VK_NULL_HANDLE;
 	}
 
