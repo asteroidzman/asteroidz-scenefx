@@ -3790,20 +3790,63 @@ bool wlr_scene_output_build_state(struct wlr_scene_output *scene_output,
 	}
 
 #ifdef FX_HAS_VULKAN
-	// fx_vk uses a full-damage path, so it skips the GLES blur_padding_region /
-	// should_compensate_blur machinery entirely. It just needs the per-output
-	// effect buffers attached and a flag noting whether any (enabled) blur node
-	// is present this frame.
+	// fx_vk skips the GLES blur_padding_region / should_compensate_blur
+	// machinery (no saved-pixels copy on the vk path), but it is NOT
+	// full-damage: live blur nodes sample the two-pass blend image
+	// ("content so far"), which only receives content where this frame has
+	// damage. A freshly mapped blurred popup only damages its own box, so
+	// its padded blur region sampled stale swapchain-buffer content (a
+	// crisp dark rectangle of whatever that buffer last rendered there).
+	// When a live blur node will re-render this frame, expand the render
+	// damage by its padded sample region so the blend beneath it is fresh.
 	if (fx_vk_render_pass_try_get(render_pass) != NULL) {
 		bool vk_has_blur = false;
 		if (is_scene_blur_enabled(&scene_output->scene->blur_data)) {
 			for (int i = 0; i < list_len; i++) {
-				enum wlr_scene_node_type type = list_data[i].node->type;
-				if (type == WLR_SCENE_NODE_BLUR ||
-						type == WLR_SCENE_NODE_OPTIMIZED_BLUR) {
-					vk_has_blur = true;
-					break;
+				struct wlr_scene_node *node = list_data[i].node;
+				enum wlr_scene_node_type type = node->type;
+				if (type != WLR_SCENE_NODE_BLUR &&
+						type != WLR_SCENE_NODE_OPTIMIZED_BLUR) {
+					continue;
 				}
+				vk_has_blur = true;
+				if (type != WLR_SCENE_NODE_BLUR) {
+					continue;
+				}
+				struct wlr_scene_blur *blur_node = wlr_scene_blur_from_node(node);
+				if (blur_node->should_only_blur_bottom_layer &&
+						blur_node->strength == 1.0f) {
+					continue;   // cache-backed: doesn't sample the blend image
+				}
+				struct blur_data blur_data = scene_output->scene->blur_data;
+				if (blur_node->strength < 1.0f) {
+					blur_data = blur_data_apply_strength(&blur_data,
+						blur_node->strength);
+				}
+				int sample_size = blur_data_calc_size(&blur_data);
+
+				pixman_region32_t node_region;
+				pixman_region32_init(&node_region);
+				pixman_region32_copy(&node_region, &node->visible);
+				pixman_region32_translate(&node_region,
+					-render_data.output->x, -render_data.output->y);
+				logical_to_buffer_coords(&node_region, &render_data, false);
+
+				pixman_region32_t hit;
+				pixman_region32_init(&hit);
+				pixman_region32_intersect(&hit, &node_region, &render_data.damage);
+				if (!pixman_region32_empty(&hit)) {
+					wlr_region_expand(&node_region, &node_region, sample_size);
+					pixman_region32_union(&render_data.damage,
+						&render_data.damage, &node_region);
+					pixman_region32_intersect_rect(&render_data.damage,
+						&render_data.damage, 0, 0, output->width, output->height);
+					state->committed |= WLR_OUTPUT_STATE_DAMAGE;
+					pixman_region32_union(&state->damage, &state->damage,
+						&node_region);
+				}
+				pixman_region32_fini(&hit);
+				pixman_region32_fini(&node_region);
 			}
 		}
 		fx_vk_render_pass_init_blur(render_pass, output, vk_has_blur);
